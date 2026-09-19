@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "allowScripts": {
+    "esbuild": true,
+    "fsevents": false,
+    "workerd": true
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
