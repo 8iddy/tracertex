@@ -71,16 +71,32 @@ npm run db:migrate:local
 npx wrangler dev
 ```
 
-## Cloudflare configuration requiring owner action
+## Cloudflare deployment and Access
 
-1. Authenticate once with `npx wrangler login`.
-2. Create the private database: `npx wrangler d1 create tracertext`.
-3. Replace the placeholder `database_id` in `wrangler.jsonc` with the returned ID.
-4. Apply the migration: `npx wrangler d1 migrations apply tracertext --remote`.
-5. Build and deploy: `npm run build && npx wrangler deploy`.
-6. Protect the deployed application with Cloudflare Access before storing private writing summaries.
+The production Worker is `tracertext`; the D1 binding is `DB` and points to the isolated `tracertext` database. Apply every migration before deploying:
+
+```bash
+npm ci
+npm run typecheck && npm test && npm run lint && npm run build
+npx wrangler d1 migrations apply tracertext --remote
+npx wrangler deploy
+```
 
 No R2 bucket or Workers AI binding is needed in Phase 1.
+
+### Required Cloudflare Access setup
+
+Access is an external production control and is not created by this repository. Do not consider authentication configured until the following policy is visible and tested in the Cloudflare dashboard:
+
+1. In **Zero Trust → Settings → Authentication → Login methods**, enable **One-time PIN**. No password database or third-party application auth is used.
+2. In **Workers & Pages → tracertext → Access**, protect the production Worker (or create a **Self-hosted** Access application for `tracertext.com` after the custom domain is attached). Protect production, not only preview deployments.
+3. Create an **Allow** policy whose selector is **Emails** and enter only the intended private-build email address. Do not use an email-domain allow rule for this single-user build.
+4. Keep the policy ahead of any broader bypass policy, and verify that an unauthenticated private window is shown the Access login page.
+5. Request an email One-Time PIN, sign in with the allowed address, and confirm `GET /api/me` creates or returns the internal D1 user. A different email must be denied by Access.
+
+The Worker reads identity only from Cloudflare's verified `ctx.access.getIdentity()` context. It intentionally ignores client-supplied identity headers. Wrangler local full-stack development uses the `access.dev` identity in `wrangler.jsonc`; this simulation is active only under `wrangler dev` and is not a production fallback.
+
+Signing out navigates to `/cdn-cgi/access/logout`. Cloudflare clears the Access session, after which the next TracerText request returns through the Access login flow.
 
 ## Storage and privacy model
 

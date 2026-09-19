@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { exportAllData, importAllData, saveSettings, validateExport } from "./indexedDb";
+import { exportAllData, importAllData, saveSettings, setActiveLocalUser, validateExport } from "./indexedDb";
 
 describe("data serialization", () => {
-  beforeEach(async () => { await new Promise<void>((resolve) => { const request = indexedDB.deleteDatabase("tracertext"); request.onsuccess = () => resolve(); request.onerror = () => resolve() }) });
+  beforeEach(async () => { await new Promise<void>((resolve) => { const request = indexedDB.deleteDatabase("tracertext"); request.onsuccess = () => resolve(); request.onerror = () => resolve() }); await setActiveLocalUser("test-user") });
   it("round trips settings without information loss", async () => {
     await saveSettings({ burstThresholdMs: 3_000, checkpointInterval: 10, syncSummaries: false });
     const exported = await exportAllData();

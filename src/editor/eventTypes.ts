@@ -28,6 +28,20 @@ export type WritingEvent = InsertEvent | DeleteEvent | ReplaceEvent | PasteEvent
 
 export type CalibrationTaskType = "personal" | "explanation" | "argument" | "revision";
 
+export type OnboardingStatus = "NEW" | "CALIBRATION_IN_PROGRESS" | "INITIAL_PROFILE_READY" | "COMPLETE";
+
+export interface AppUser {
+  id: string;
+  email: string;
+  displayName?: string;
+  createdAt: string;
+  lastSeenAt?: string;
+  onboardingStatus: OnboardingStatus;
+  onboardingStep: number;
+  onboardingCompletedAt?: string;
+  activeProfileId?: string;
+}
+
 export interface PauseBucket {
   label: "< 500 ms" | "500 ms–1 s" | "1–2 s" | "2–5 s" | "5–10 s" | "> 10 s";
   count: number;
@@ -71,6 +85,7 @@ export interface SessionMetrics {
 
 export interface WritingSession {
   id: string;
+  userId?: string;
   promptId: string;
   prompt: string;
   taskType: CalibrationTaskType;
@@ -85,6 +100,8 @@ export interface WritingSession {
 export interface FrequencyItem { value: string; frequency: number }
 
 export interface WriterProfile {
+  id?: string;
+  userId?: string;
   version: number;
   createdAt: string;
   updatedAt: string;

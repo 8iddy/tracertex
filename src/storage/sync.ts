@@ -14,7 +14,7 @@ async function post(path: string, body: unknown): Promise<SyncResult> {
 export function syncSessionSummary(session: WritingSession): Promise<SyncResult> {
   const { events: _events, ...summary } = session;
   void _events;
-  return post("/api/sessions", summary);
+  return post("/api/sessions", { ...summary, eventCount: session.events.length });
 }
 
 export function syncWriterProfile(profile: WriterProfile): Promise<SyncResult> { return post("/api/profiles", profile) }

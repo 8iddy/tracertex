@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Database, Download, HardDrive, RotateCcw, ShieldCheck, Upload } from "lucide-react";
+import { Database, Download, HardDrive, LogOut, RotateCcw, ShieldCheck, Upload, UserRound } from "lucide-react";
+import { useAuth } from "../auth/AuthContext";
 import type { TracerTextSettings } from "../editor/eventTypes";
 import { downloadDataExport } from "../export/jsonExport";
 import { clearAllData, getSettings, importAllData, saveSettings, validateExport } from "../storage/indexedDb";
 
 export function SettingsPage() {
+  const { user, signOut } = useAuth();
   const [settings, setSettings] = useState<TracerTextSettings>({ burstThresholdMs: 2_000, checkpointInterval: 25, syncSummaries: true });
   const [message, setMessage] = useState("");
   const file = useRef<HTMLInputElement>(null);
@@ -22,6 +24,7 @@ export function SettingsPage() {
   return <div className="page settings-page">
     <header className="page-header"><div><span className="eyebrow">Local data and behavior</span><h1>Settings</h1><p>TracerText is private by design. High-volume writing events stay in this browser by default.</p></div></header>
     {message && <div className="notice" role="status">{message}</div>}
+    <section className="settings-section identity-section"><div className="section-heading"><div><h2>Identity</h2><p>Your private TracerText workspace and onboarding state.</p></div><UserRound size={22} /></div><div className="identity-grid"><div><span>Signed-in email</span><strong className="identity-email">{user?.email ?? "Unavailable"}</strong></div><div><span>Internal profile</span><strong>{user?.activeProfileId ? "Active" : "Building"}</strong></div><div><span>Onboarding status</span><strong>{user?.onboardingStatus.replaceAll("_", " ") ?? "Unavailable"}</strong></div></div><button className="quiet-button" type="button" onClick={signOut}><LogOut size={16} />Sign Out</button></section>
     <section className="settings-section"><div className="section-heading"><div><h2>Where your data lives</h2><p>No analytics, advertising trackers, or public telemetry are included.</p></div><ShieldCheck size={22} /></div><div className="storage-rows"><div><HardDrive size={18} /><span><strong>Raw writing events</strong><small>Stored locally in IndexedDB</small></span><b>Local only</b></div><div><Database size={18} /><span><strong>Session summaries</strong><small>Saved locally; private D1 sync is attempted only when enabled and available</small></span><b>Local copy</b></div><div><Database size={18} /><span><strong>Writer Profile</strong><small>Saved locally; private D1 sync is attempted only when enabled and available</small></span><b>Local copy</b></div></div></section>
     <section className="settings-section"><h2>Recording</h2><label className="field-label">A writing burst ends after<select value={settings.burstThresholdMs} onChange={(event) => void update({ ...settings, burstThresholdMs: Number(event.target.value) })}><option value={1_000}>1 second</option><option value={2_000}>2 seconds</option><option value={3_000}>3 seconds</option><option value={5_000}>5 seconds</option></select></label><label className="toggle-row"><span><strong>Sync summaries</strong><small>Continue saving locally when the Worker is unavailable.</small></span><input type="checkbox" checked={settings.syncSummaries} onChange={(event) => void update({ ...settings, syncSummaries: event.target.checked })} /></label></section>
     <section className="settings-section"><h2>Data ownership</h2><p>The documented JSON export contains sessions, prompts, final documents, event histories, metrics, profile versions, and settings.</p><div className="button-row"><button className="primary-button" type="button" onClick={() => void downloadDataExport()}><Download size={16} />Export all TracerText data</button><button className="quiet-button" type="button" onClick={() => file.current?.click()}><Upload size={16} />Import TracerText data</button><input ref={file} type="file" accept="application/json,.json" hidden onChange={(event) => void restore(event.target.files?.[0])} /></div></section>

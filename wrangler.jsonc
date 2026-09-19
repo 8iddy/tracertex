@@ -2,7 +2,17 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "tracertext",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-09-01",
+  "compatibility_date": "2026-09-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "access": {
+    "dev": {
+      "aud": "tracertext-local-development",
+      "identity": {
+        "email": "dev@tracertext.local",
+        "name": "Local TracerText Developer"
+      }
+    }
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
