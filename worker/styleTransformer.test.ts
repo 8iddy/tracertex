@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WriterProfile } from "../src/editor/eventTypes";
-import { buildStylePrompt, parseCandidates, rankCandidates, transformationDepth, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
+import { buildStylePrompt, detectSourceRegister, parseCandidates, rankCandidates, transformationDepth, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
 
 const profile = {
   version: 2, createdAt: "2026-01-01", updatedAt: "2026-01-02", sampleSessions: 4, sampleWords: 500, sampleEvents: 900,
@@ -18,6 +18,7 @@ describe("styleTransformer", () => {
     expect(prompt).toContain("in practice (3)");
     expect(prompt).toContain("Preserve meaning, claims, numbers, percentages, dates");
     expect(prompt).toContain("confidence is informational");
+    expect(prompt).toContain("Never introduce first-person perspective");
   });
 
   it("turns measurements into usable style direction", () => {
@@ -64,5 +65,24 @@ describe("styleTransformer", () => {
       expect.stringContaining("certainty"),
       expect.stringContaining("direction"),
     ]));
+  });
+
+  it("preserves source register and blocks newly introduced first-person stance", async () => {
+    const formalDraft = "The policy assessment therefore recommends targeted implementation. Evidence from the programme supports this recommendation.";
+    expect(detectSourceRegister(formalDraft)).toBe("formal");
+    expect(buildStylePrompt(formalDraft, profile)).toContain("FORMAL:");
+    const [score] = await rankCandidates(formalDraft, ["I think the policy assessment recommends targeted implementation. My experience says the programme evidence supports it."], undefined);
+    expect(score?.valid).toBe(false);
+    expect(score?.warnings).toEqual(expect.arrayContaining([expect.stringContaining("first-person")]));
+  });
+
+  it("blocks changed epistemic strength and penalizes mechanical fluency defects", async () => {
+    const [stance] = await rankCandidates("Digital sensing should be used only if evidence supports it.", ["Digital sensing might be used only if evidence supports it."], undefined);
+    expect(stance?.valid).toBe(false);
+    expect(stance?.warnings).toEqual(expect.arrayContaining([expect.stringContaining("epistemic stance")]));
+
+    const [fluent, clumsy] = await rankCandidates("Teams coordinate systems.", ["Teams coordinate systems.", "Teams coordinate systems and partners and vendors and policymakers havent aligned."], undefined);
+    expect(clumsy!.fluency).toBeLessThan(fluent!.fluency);
+    expect(clumsy?.warnings).toEqual(expect.arrayContaining([expect.stringContaining("apostrophe"), expect.stringContaining("conjunctions")]));
   });
 });
