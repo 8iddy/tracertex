@@ -1,4 +1,5 @@
 import type { AppUser, OnboardingStatus } from "../src/editor/eventTypes";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 export interface VerifiedIdentity {
   email: string;
@@ -37,12 +38,23 @@ export function mapUser(row: UserRow): AppUser {
   };
 }
 
-export async function getVerifiedIdentity(access?: CloudflareAccessContext): Promise<VerifiedIdentity | undefined> {
-  if (!access) return undefined;
-  const identity = await access.getIdentity();
-  const email = identity?.email?.trim().toLowerCase();
+export async function getVerifiedIdentity(access?: CloudflareAccessContext, request?: Request, config?: { audience: string; teamDomain: string }): Promise<VerifiedIdentity | undefined> {
+  const identity = access ? await access.getIdentity() : undefined;
+  let email = identity?.email?.trim().toLowerCase();
+  let displayName = identity?.name?.trim() || undefined;
+  if (!email && request && config) {
+    const token = request.headers.get("Cf-Access-Jwt-Assertion");
+    if (!token) return undefined;
+    try {
+      const issuer = config.teamDomain.replace(/\/$/, "");
+      const jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
+      const verified = await jwtVerify(token, jwks, { audience: config.audience, issuer });
+      email = typeof verified.payload.email === "string" ? verified.payload.email.trim().toLowerCase() : undefined;
+      displayName = typeof verified.payload.name === "string" ? verified.payload.name.trim() || undefined : undefined;
+    } catch { return undefined }
+  }
   if (!email) return undefined;
-  return { email, displayName: identity?.name?.trim() || undefined };
+  return { email, displayName };
 }
 
 export async function ensureApplicationUser(repository: UserRepository, identity: VerifiedIdentity, now: string, createId: () => string = () => crypto.randomUUID()): Promise<AppUser> {

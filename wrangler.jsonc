@@ -20,6 +20,10 @@
     "run_worker_first": ["/api/*"]
   },
   "ai": { "binding": "AI" },
+  "vars": {
+    "ACCESS_AUD": "8dbea7411cea3e6bb283afe020a4045d88471edeed8235b4da90237147ac5b0f",
+    "ACCESS_TEAM_DOMAIN": "https://neuravox.cloudflareaccess.com"
+  },
   "d1_databases": [
     {
       "binding": "DB",

@@ -41,6 +41,11 @@ describe("application identity", () => {
     expect(await getVerifiedIdentity(undefined)).toBeUndefined();
   });
 
+  it("rejects an unverified Access assertion", async () => {
+    const request = new Request("https://example.com/api/me", { headers: { "Cf-Access-Jwt-Assertion": "not-a-jwt" } });
+    await expect(getVerifiedIdentity(undefined, request, { audience: "aud", teamDomain: "https://team.cloudflareaccess.com" })).resolves.toBeUndefined();
+  });
+
   it("normalizes the verified Access email", async () => {
     const access = { aud: "local", getIdentity: async () => ({ email: " Writer@Example.COM ", name: "Writer" }) } satisfies CloudflareAccessContext;
     await expect(getVerifiedIdentity(access)).resolves.toEqual({ email: "writer@example.com", displayName: "Writer" });

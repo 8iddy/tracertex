@@ -15,8 +15,8 @@ async function parseBody(request: Request): Promise<Record<string, unknown>> {
   return body as Record<string, unknown>;
 }
 
-async function authenticatedUser(env: Env, ctx: ExecutionContext): Promise<AppUser | undefined> {
-  const identity = await getVerifiedIdentity(ctx.access);
+async function authenticatedUser(request: Request, env: Env, ctx: ExecutionContext): Promise<AppUser | undefined> {
+  const identity = await getVerifiedIdentity(ctx.access, request, { audience: env.ACCESS_AUD, teamDomain: env.ACCESS_TEAM_DOMAIN });
   if (!identity) return undefined;
   return ensureApplicationUser(new D1UserRepository(env.DB), identity, new Date().toISOString());
 }
@@ -97,7 +97,7 @@ export default {
     try {
       if (url.pathname === "/api/health" && request.method === "GET") return json({ ok: true, phase: 2 });
       if (url.pathname.startsWith("/api/")) {
-        const user = await authenticatedUser(env, ctx);
+        const user = await authenticatedUser(request, env, ctx);
         if (!user) return json({ error: "Cloudflare Access authentication is required." }, 401);
         if (url.pathname === "/api/me" && request.method === "GET") return json(user);
         if (url.pathname === "/api/onboarding/start" && request.method === "POST") return json(await startOnboarding(env, user));
