@@ -33,6 +33,11 @@ describe("onboarding state machine", () => {
     expect(profile.sampleEvents).toBe(4);
   });
 
+  it("keeps core completion separate from later profile maturity", () => {
+    expect(progressForCompletedTasks(["personal", "explanation", "argument", "revision", "revision"])).toEqual({ status: "INITIAL_PROFILE_READY", step: 4 });
+    expect(requiredRouteRedirect(user("COMPLETE", 4), "/calibration")).toBeNull();
+  });
+
   it("switches a profile-ready user to COMPLETE", () => {
     expect(markOnboardingComplete(user("INITIAL_PROFILE_READY", 4), "2026-09-20T00:00:00.000Z")).toMatchObject({ onboardingStatus: "COMPLETE", onboardingStep: 4, onboardingCompletedAt: "2026-09-20T00:00:00.000Z" });
   });

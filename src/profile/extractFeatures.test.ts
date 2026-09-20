@@ -18,4 +18,16 @@ describe("writing metrics", () => {
     expect(metrics.medianBurstLength).toBe(9.5);
     expect(metrics.revisionCount).toBe(1);
   });
+
+  it("does not count a backspace run as many separate revisions", () => {
+    const base = { sessionId: "s", source: "keyboard" as const };
+    const events: WritingEvent[] = [
+      { ...base, id: "1", sequence: 1, timestamp: 0, type: "insert", position: 0, text: "draft" },
+      { ...base, id: "2", sequence: 2, timestamp: 100, type: "delete", position: 4, text: "t" },
+      { ...base, id: "3", sequence: 3, timestamp: 200, type: "delete", position: 3, text: "f" },
+      { ...base, id: "4", sequence: 4, timestamp: 300, type: "delete", position: 2, text: "a" },
+      { ...base, id: "5", sequence: 5, timestamp: 2_000, type: "replace", position: 0, removedText: "dr", insertedText: "note" },
+    ];
+    expect(calculateSessionMetrics(events, "note").revisionCount).toBe(2);
+  });
 });

@@ -38,6 +38,27 @@ function classifyPauseContext(document: string, position: number, counts: PauseC
   else counts.insideWord += 1;
 }
 
+/**
+ * Browser input emits one delete mutation per keypress. Treat a contiguous,
+ * rapid run of deletions/replacements as one revision decision, so the metric
+ * describes editing behavior rather than keyboard-repeat granularity.
+ */
+export function countMeaningfulRevisions(events: WritingEvent[]): number {
+  let count = 0;
+  let previous: WritingEvent | undefined;
+  for (const event of events) {
+    if (event.type !== "delete" && event.type !== "replace") {
+      previous = event;
+      continue;
+    }
+    const previousWasRevision = previous && (previous.type === "delete" || previous.type === "replace");
+    const contiguous = Boolean(previousWasRevision && previous && event.timestamp - previous.timestamp <= 1_500);
+    if (!contiguous) count += 1;
+    previous = event;
+  }
+  return count;
+}
+
 export function calculateSessionMetrics(events: WritingEvent[], finalDocument: string, burstThresholdMs = DEFAULT_BURST_THRESHOLD_MS): SessionMetrics {
   const ordered = [...events].sort((a, b) => a.sequence - b.sequence);
   const textEvents = ordered.filter((event) => event.type === "insert" || event.type === "delete" || event.type === "replace" || event.type === "paste");
@@ -91,7 +112,7 @@ export function calculateSessionMetrics(events: WritingEvent[], finalDocument: s
     paragraphCount: paragraphParts.length,
     meanSentenceWords: mean(sentenceParts.map((sentence) => words(sentence).length)),
     meanParagraphWords: mean(paragraphParts.map((paragraph) => words(paragraph).length)),
-    revisionCount: replacementCount + textEvents.filter((event) => event.type === "delete").length,
+    revisionCount: countMeaningfulRevisions(textEvents),
   };
 }
 

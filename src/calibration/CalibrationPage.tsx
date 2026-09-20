@@ -5,13 +5,14 @@ import { useAuth } from "../auth/AuthContext";
 import { WriterEditor } from "../editor/WriterEditor";
 import type { EventSource, TracerTextSettings } from "../editor/eventTypes";
 import { getSettings } from "../storage/indexedDb";
-import { calibrationPrompts, nextPrompt, type CalibrationPrompt } from "./prompts";
+import { calibrationPrompts, nextOptionalPrompt, optionalCalibrationPrompts, type CalibrationPrompt } from "./prompts";
 import { createSession, finalizeSession } from "./sessionController";
 
 export function CalibrationPage({ onboarding = false }: { onboarding?: boolean }) {
   const { user, refreshUser } = useAuth();
   const [searchParams] = useSearchParams();
-  const initialPrompt = onboarding ? (calibrationPrompts[user?.onboardingStep ?? 0] ?? calibrationPrompts[0]!) : (calibrationPrompts.find((item) => item.id === searchParams.get("prompt")) ?? calibrationPrompts[0]!);
+  const promptSet = onboarding ? calibrationPrompts : optionalCalibrationPrompts;
+  const initialPrompt = onboarding ? (calibrationPrompts[user?.onboardingStep ?? 0] ?? calibrationPrompts[0]!) : (optionalCalibrationPrompts.find((item) => item.id === searchParams.get("prompt")) ?? optionalCalibrationPrompts[0]!);
   const [prompt, setPrompt] = useState<CalibrationPrompt>(initialPrompt);
   const active = useMemo(() => createSession(prompt), [prompt]);
   const [text, setText] = useState(prompt.startingDocument);
@@ -33,7 +34,7 @@ export function CalibrationPage({ onboarding = false }: { onboarding?: boolean }
 
   const changePrompt = () => {
     if (text !== prompt.startingDocument && !window.confirm("Start a different prompt? This unfinished sample will be discarded.")) return;
-    const next = nextPrompt(prompt.id);
+    const next = nextOptionalPrompt(prompt.id);
     setPrompt(next); setText(next.startingDocument); textEventCount.current = 0;
   };
   const onTextChange = (next: string, source: EventSource) => {
@@ -61,14 +62,14 @@ export function CalibrationPage({ onboarding = false }: { onboarding?: boolean }
 
   return <div className={`calibration-page instrument-page${onboarding ? " onboarding-calibration" : ""}`}>
     <div className="calibration-lane">
-    <div className="calibration-session-line"><span><i className="status-dot" />{onboarding ? `Initial calibration ${calibrationPrompts.findIndex((item) => item.id === prompt.id) + 1} of ${calibrationPrompts.length}` : `Calibration session ${String(calibrationPrompts.findIndex((item) => item.id === prompt.id) + 1).padStart(2, "0")} / ${String(calibrationPrompts.length).padStart(2, "0")}`}</span><span>{prompt.label}</span></div>
+    <div className="calibration-session-line"><span><i className="status-dot" />{onboarding ? `Initial calibration ${calibrationPrompts.findIndex((item) => item.id === prompt.id) + 1} of ${calibrationPrompts.length}` : `Profile improvement sample ${String(promptSet.findIndex((item) => item.id === prompt.id) + 1).padStart(2, "0")} / ${String(promptSet.length).padStart(2, "0")}`}</span><span>{prompt.label}</span></div>
     <section className="prompt-panel">
       <div><span className="prompt-type"><Lightbulb size={14} />Assigned prompt</span><h2>{prompt.prompt}</h2><p>{prompt.guidance}</p></div>
       {!onboarding && <button className="quiet-button" type="button" onClick={changePrompt}><RefreshCcw size={15} />Different prompt</button>}
     </section>
     <WriterEditor key={prompt.id} minimal disabled={paused} initialText={prompt.startingDocument} onTextChange={onTextChange} onSelectionChange={(anchor, focus) => active.recorder.recordSelection(anchor, focus)} onFocusChange={(focused) => active.recorder.record(focused ? "focus" : "blur")} onComposition={(phase, value, position) => active.recorder.recordComposition(phase, value, position)} onHistory={(action) => active.recorder.record(action)} />
     {error && <p className="error-text" role="alert">{error}</p>}
-    <div className="calibration-actions"><div className="session-readout"><span><Clock3 size={15} /><b>{elapsed}</b> elapsed</span><span className="readout-separator" /><span><b>{wordCount}</b> {wordCount === 1 ? "word" : "words"}</span>{!onboarding && <span className="saved-state"><Check size={13} />Saved locally</span>}</div><div className="session-buttons">{!onboarding && <button className="secondary-button" type="button" onClick={() => setPaused((value) => !value)}>{paused ? <Play size={15} /> : <Pause size={15} />}{paused ? "Resume" : "Pause"}</button>}<button className="primary-button" type="button" disabled={!text.trim() || finishing} onClick={() => void finish()}><Check size={16} />{finishing ? "Finishing…" : "Finish Session"}</button></div></div>
+    <div className="calibration-actions"><div className="session-readout"><span><Clock3 size={15} /><b>{elapsed}</b> elapsed</span><span className="readout-separator" /><span><b>{wordCount}</b> {wordCount === 1 ? "word" : "words"}</span>{!onboarding && <span className="saved-state"><Check size={13} />Saved locally</span>}</div><div className="session-buttons">{!onboarding && <><button className="secondary-button" type="button" onClick={() => navigate("/write")}>Leave calibration</button><button className="secondary-button" type="button" onClick={() => setPaused((value) => !value)}>{paused ? <Play size={15} /> : <Pause size={15} />}{paused ? "Resume" : "Pause"}</button></>}<button className="primary-button" type="button" disabled={!text.trim() || finishing} onClick={() => void finish()}><Check size={16} />{finishing ? "Finishing…" : "Finish Session"}</button></div></div>
     </div>
   </div>;
 }

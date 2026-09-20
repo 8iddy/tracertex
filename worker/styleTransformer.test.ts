@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WriterProfile } from "../src/editor/eventTypes";
-import { buildStylePrompt, transformWithProfile } from "./styleTransformer";
+import { buildStylePrompt, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
 
 const profile = {
   version: 2, createdAt: "2026-01-01", updatedAt: "2026-01-02", sampleSessions: 4, sampleWords: 500, sampleEvents: 900,
@@ -13,11 +13,18 @@ const profile = {
 describe("styleTransformer", () => {
   it("uses measured profile features without treating confidence as a gate", () => {
     const prompt = buildStylePrompt("Revenue rose 12% in 2025.", profile);
-    expect(prompt).toContain("12.5 words");
+    expect(prompt).toContain("substantive style transfer");
     expect(prompt).toContain("plainly (4)");
     expect(prompt).toContain("in practice (3)");
     expect(prompt).toContain("Preserve meaning, claims, numbers, percentages, dates");
     expect(prompt).toContain("confidence is informational");
+  });
+
+  it("turns measurements into usable style direction", () => {
+    const context = writerProfileToStyleContext(profile);
+    expect(context).toContain("medium-length sentences");
+    expect(context).toContain("compact paragraphs");
+    expect(context).toContain("never prevents a substantive rewrite");
   });
 
   it("returns the model text and strips an accidental fence", async () => {
