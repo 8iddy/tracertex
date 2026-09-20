@@ -40,6 +40,12 @@ describe("styleTransformer", () => {
     await expect(transformWithProfile(ai, "Revenue rose 12% in 2025.", profile)).resolves.toMatchObject({ retried: false });
   });
 
+  it("uses one candidate for a long draft to preserve the model output budget", async () => {
+    const longDraft = `${"Revenue rose 12% in 2025. ".repeat(350)}`;
+    const prompt = buildStylePrompt(longDraft, profile, undefined, false, 1);
+    expect(prompt).toContain("exactly 1 genuinely different");
+  });
+
   it("rejects broken factual candidates and detects a too-light rewrite", async () => {
     const scores = await rankCandidates("Revenue rose 12% in 2025.", ["Revenue rose 8% in 2025.", "In 2025, revenue rose by 12%."], undefined);
     expect(scores[0]?.valid).toBe(false);
