@@ -95,6 +95,41 @@ export interface WritingSession {
   finalDocument: string;
   events: WritingEvent[];
   metrics: SessionMetrics;
+  /** Only genuine user-authored calibration is eligible to teach personal style. */
+  styleEligible?: boolean;
+}
+
+export interface StyleFingerprint {
+  id?: string;
+  writerProfileId?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  sourceSessionIds: string[];
+  sourceWordCount: number;
+  statistics: {
+    meanSentenceWords: number;
+    sentenceLengthDistribution: number[];
+    meanParagraphWords: number;
+    paragraphLengthDistribution: number[];
+    punctuationFrequency: Record<string, number>;
+    transitionFrequency: Record<string, number>;
+    hedgeFrequency: Record<string, number>;
+    functionWordFrequency: Record<string, number>;
+    sentenceOpeningPatterns: string[];
+    commonPhrases: string[];
+  };
+  rhetoricalPatterns: {
+    sentenceConstruction: string[];
+    paragraphMovement: string[];
+    qualificationPatterns: string[];
+    argumentPatterns: string[];
+    transitionPatterns: string[];
+    lexicalPreferences: string[];
+    avoidedPatterns: string[];
+  };
+  representativeExcerpts: Array<{ sessionId: string; taskType: CalibrationTaskType; text: string }>;
+  confidence: { statistics: number; rhetoricalPatterns: number; exemplars: number; overall: number };
 }
 
 export interface FrequencyItem { value: string; frequency: number }

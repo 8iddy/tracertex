@@ -31,6 +31,7 @@ export async function finalizeSession(active: ActiveSession, finalDocument: stri
     finalDocument,
     events,
     metrics: calculateSessionMetrics(events, finalDocument, burstThresholdMs),
+    styleEligible: true,
   };
   await saveSession(session);
   const sessions = await getSessions();

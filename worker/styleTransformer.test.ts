@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WriterProfile } from "../src/editor/eventTypes";
-import { buildStylePrompt, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
+import { buildStylePrompt, rankCandidates, transformationDepth, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
 
 const profile = {
   version: 2, createdAt: "2026-01-01", updatedAt: "2026-01-02", sampleSessions: 4, sampleWords: 500, sampleEvents: 900,
@@ -27,8 +27,17 @@ describe("styleTransformer", () => {
     expect(context).toContain("never prevents a substantive rewrite");
   });
 
-  it("returns the model text and strips an accidental fence", async () => {
-    const ai = { run: vi.fn().mockResolvedValue({ choices: [{ message: { content: "```text\nStyled draft.\n```" } }] }) } as unknown as Ai;
-    await expect(transformWithProfile(ai, "Draft.", profile)).resolves.toBe("Styled draft.");
+  it("parses multiple candidates and returns the safest ranked rewrite", async () => {
+    const ai = { run: vi.fn().mockResolvedValue({ choices: [{ message: { content: "```json\n{\"candidates\":[\"Revenue rose 12% in 2025, and the result was clear.\",\"In 2025, revenue rose by 12%; the outcome was clear.\"]}\n```" } }] }) } as unknown as Ai;
+    const result = await transformWithProfile(ai, "Revenue rose 12% in 2025.", profile);
+    expect(result.transformed).toContain("12%");
+    expect(result.scores).toHaveLength(2);
+  });
+
+  it("rejects broken factual candidates and detects a too-light rewrite", async () => {
+    const scores = await rankCandidates("Revenue rose 12% in 2025.", ["Revenue rose 8% in 2025.", "In 2025, revenue rose by 12%."], undefined);
+    expect(scores[0]?.valid).toBe(false);
+    expect(scores[1]?.valid).toBe(true);
+    expect(transformationDepth("One sentence. Another sentence.", "One sentence. Another sentence.").tooLight).toBe(true);
   });
 });
