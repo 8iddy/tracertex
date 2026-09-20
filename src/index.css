@@ -324,6 +324,7 @@ p { color: var(--text-secondary); line-height: 1.55; }
 .draft-pane > header small { padding: 2px 5px; background: var(--surface); border: 1px solid var(--border); font-size: .58rem; text-transform: uppercase; }
 .source-pane textarea { flex: 1; width: min(68ch, calc(100% - 60px)); min-height: 600px; margin: 0 auto; padding: 40px 0; resize: none; outline: 0; color: var(--text-primary); background: transparent; border: 0; font-family: var(--serif); font-size: 1.05rem; line-height: 1.7; }
 .source-pane textarea::placeholder { color: var(--text-faint); }
+.transformed-editor { flex: 1; width: min(68ch, calc(100% - 60px)); min-height: 600px; margin: 0 auto; padding: 40px 0; resize: none; outline: 0; color: var(--text-primary); background: transparent; border: 0; font-family: var(--serif); font-size: 1.05rem; line-height: 1.7; }
 .output-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 470px; margin: auto; padding: 45px; text-align: center; }
 .output-empty > span { width: 44px; height: 44px; display: grid; place-items: center; margin-bottom: 16px; color: var(--primary); background: var(--primary-soft); border: 1px solid #dce1f3; }
 .output-empty h1 { margin-bottom: 8px; font-size: 1.55rem; }
@@ -336,6 +337,13 @@ p { color: var(--text-secondary); line-height: 1.55; }
 .validation-items .review { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
 .export-actions > span { margin-right: 3px; color: var(--text-secondary); font-family: var(--mono); font-size: .62rem; }
 .export-actions button { padding: 5px 8px; color: var(--text-primary); background: var(--surface); border: 1px solid var(--border-strong); font-family: var(--mono); font-size: .6rem; }
+.export-actions button:disabled { color: var(--text-faint); cursor: not-allowed; }
+.validation-items .match-positive { color: var(--success); background: var(--success-soft); border-color: var(--success-border); }
+.validation-details { padding: 8px 22px; color: var(--warning); background: var(--warning-soft); border-top: 1px solid var(--warning-border); font-size: .68rem; }
+.validation-details summary { cursor: pointer; font-weight: 600; }
+.validation-details p { margin: 6px 0 0; }
+.spin { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 64px minmax(0, 1fr); }

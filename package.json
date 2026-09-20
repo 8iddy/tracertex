@@ -29,11 +29,12 @@
     "@lexical/rich-text": "0.51.0",
     "@lexical/selection": "0.51.0",
     "@lexical/utils": "0.51.0",
+    "docx": "^9.5.1",
     "lexical": "0.51.0",
     "lucide-react": "0.544.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "react-router-dom": "7.9.4"
+    "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260919.1",
@@ -50,8 +51,8 @@
     "jsdom": "27.0.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.46.2",
-    "vite": "7.1.12",
-    "vitest": "4.0.8",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11",
     "wrangler": "^4.135.0"
   }
 }

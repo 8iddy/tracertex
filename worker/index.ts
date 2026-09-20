@@ -1,6 +1,8 @@
 import type { AppUser, CalibrationTaskType } from "../src/editor/eventTypes";
 import { progressForCompletedTasks } from "../src/auth/onboarding";
 import { D1UserRepository, ensureApplicationUser, getVerifiedIdentity } from "./auth";
+import { transformWithProfile } from "./styleTransformer";
+import type { WriterProfile } from "../src/editor/eventTypes";
 
 const REQUIRED_TASKS: CalibrationTaskType[] = ["personal", "explanation", "argument", "revision"];
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "cache-control": "no-store" } });
@@ -62,6 +64,20 @@ async function saveProfile(request: Request, env: Env, user: AppUser): Promise<R
   return json({ ok: true, version }, 201);
 }
 
+async function transformDraft(request: Request, env: Env, user: AppUser): Promise<Response> {
+  const body = await parseBody(request);
+  const draft = typeof body.draft === "string" ? body.draft.trim() : "";
+  if (!draft) return json({ error: "A completed draft is required." }, 400);
+  if (draft.length > 60_000) return json({ error: "Drafts must be 60,000 characters or fewer." }, 413);
+  const row = await env.DB.prepare(`SELECT p.profile_json FROM writer_profiles p
+    JOIN users u ON u.active_profile_id = p.id
+    WHERE u.id = ? AND p.user_id = u.id`).bind(user.id).first<{ profile_json: string }>();
+  if (!row) return json({ error: "Complete calibration to create an active Writer Profile." }, 409);
+  const profile = JSON.parse(row.profile_json) as WriterProfile;
+  const transformed = await transformWithProfile(env.AI, draft, profile);
+  return json({ transformed, provider: "Cloudflare Workers AI", model: "@cf/google/gemma-4-26b-a4b-it", profileVersion: profile.version, profileConfidence: profile.confidence.overall });
+}
+
 async function startOnboarding(env: Env, user: AppUser): Promise<AppUser> {
   if (user.onboardingStatus !== "NEW") return user;
   await env.DB.prepare("UPDATE users SET onboarding_status = 'CALIBRATION_IN_PROGRESS', onboarding_step = 0 WHERE id = ?").bind(user.id).run();
@@ -79,7 +95,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     try {
-      if (url.pathname === "/api/health" && request.method === "GET") return json({ ok: true, phase: 1 });
+      if (url.pathname === "/api/health" && request.method === "GET") return json({ ok: true, phase: 2 });
       if (url.pathname.startsWith("/api/")) {
         const user = await authenticatedUser(env, ctx);
         if (!user) return json({ error: "Cloudflare Access authentication is required." }, 401);
@@ -91,6 +107,7 @@ export default {
         }
         if (url.pathname === "/api/sessions" && request.method === "POST") return await saveSession(request, env, user);
         if (url.pathname === "/api/profiles" && request.method === "POST") return await saveProfile(request, env, user);
+        if (url.pathname === "/api/transform" && request.method === "POST") return await transformDraft(request, env, user);
         return json({ error: "Not found" }, 404);
       }
       return env.ASSETS.fetch(request);
