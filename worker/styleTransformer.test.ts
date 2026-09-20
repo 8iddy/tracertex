@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WriterProfile } from "../src/editor/eventTypes";
-import { buildStylePrompt, rankCandidates, transformationDepth, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
+import { buildStylePrompt, parseCandidates, rankCandidates, transformationDepth, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
 
 const profile = {
   version: 2, createdAt: "2026-01-01", updatedAt: "2026-01-02", sampleSessions: 4, sampleWords: 500, sampleEvents: 900,
@@ -32,6 +32,12 @@ describe("styleTransformer", () => {
     const result = await transformWithProfile(ai, "Revenue rose 12% in 2025.", profile);
     expect(result.transformed).toContain("12%");
     expect(result.scores).toHaveLength(2);
+  });
+
+  it("accepts object candidates and falls back once from malformed structured output", async () => {
+    expect(parseCandidates('{"candidates":[{"id":"a","text":"One."},{"id":"b","text":"Two."}]}')).toEqual(["One.", "Two."]);
+    const ai = { run: vi.fn().mockResolvedValueOnce({ choices: [{ message: { content: "not-json" } }] }).mockResolvedValueOnce({ choices: [{ message: { content: "{\"candidates\":[{\"id\":\"a\",\"text\":\"Revenue rose 12% in 2025, with a clear result.\"}]}" } }] }) } as unknown as Ai;
+    await expect(transformWithProfile(ai, "Revenue rose 12% in 2025.", profile)).resolves.toMatchObject({ retried: false });
   });
 
   it("rejects broken factual candidates and detects a too-light rewrite", async () => {

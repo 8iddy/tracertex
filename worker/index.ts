@@ -109,7 +109,13 @@ async function transformDraft(request: Request, env: Env, user: AppUser): Promis
   if (!row) return json({ error: "Complete calibration to create an active Writer Profile." }, 409);
   const profile = JSON.parse(row.profile_json) as WriterProfile;
   const fingerprintRow = await env.DB.prepare("SELECT fingerprint_json FROM style_fingerprints WHERE user_id = ? ORDER BY version DESC LIMIT 1").bind(user.id).first<{ fingerprint_json: string }>();
-  const result = await transformWithProfile(env.AI, draft, profile, fingerprintRow ? JSON.parse(fingerprintRow.fingerprint_json) as StyleFingerprint : undefined);
+  let result;
+  try { result = await transformWithProfile(env.AI, draft, profile, fingerprintRow ? JSON.parse(fingerprintRow.fingerprint_json) as StyleFingerprint : undefined); }
+  catch (error) {
+    const code = error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "GENERATION_FAILED";
+    console.error(JSON.stringify({ message: "transformation failed", code, userId: user.id }));
+    return json({ error: "We couldn’t complete this transformation. Your original draft is unchanged. Please try again.", code }, 422);
+  }
   return json({ transformed: result.transformed, provider: "Cloudflare Workers AI", model: "@cf/google/gemma-4-26b-a4b-it", profileVersion: profile.version, profileConfidence: profile.confidence.overall, candidateScores: result.scores.map((score) => ({ meaning: score.meaning, style: score.style, fluency: score.fluency, total: score.total, valid: score.valid, warnings: score.warnings })), retried: result.retried });
 }
 
