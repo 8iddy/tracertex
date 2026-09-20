@@ -4,7 +4,10 @@ import { compareSemanticSignals } from "../src/validation/compareSemanticSignals
 import { heuristicExemplarRetriever } from "../src/profile/styleFingerprint";
 
 export const STYLE_MODEL = "@cf/google/gemma-4-26b-a4b-it";
-export interface CandidateScore { candidate: string; meaning: number; style: number; fluency: number; total: number; valid: boolean; warnings: string[] }
+export interface CandidateDiagnostics { sentenceRetention: number; lexicalChange: number; paragraphRestructure: number; protectedFactFailures: number; registerViolations: number; semanticHardFailures: number; semanticWarnings: number; fluencyWarnings: number }
+export interface CandidateScore { candidate: string; meaning: number; style: number; fluency: number; total: number; valid: boolean; warnings: string[]; diagnostics: CandidateDiagnostics }
+export interface AttemptDiagnostics { attempt: "initial" | "retry"; candidates: Array<Omit<CandidateScore, "candidate" | "warnings"> & { index: number; warningCount: number }> }
+export interface TransformationDiagnostics { attempts: AttemptDiagnostics[]; retryReasons: string[]; selectedAttempt: "initial" | "retry"; selectedCandidateIndex: number; selectionReason: string }
 export interface StyleSimilarityScorer { score(candidate: string, fingerprint: StyleFingerprint): Promise<number> }
 
 export type SourceRegister = "formal" | "neutral" | "conversational";
@@ -173,6 +176,7 @@ export async function rankCandidates(input: string, candidates: string[], finger
   return Promise.all(candidates.map(async (candidate) => {
     try {
       const fact = compareProtectedFacts(input, candidate); const semantic = compareSemanticSignals(input, candidate); const guardrails = authorshipGuardrails(input, candidate); const fluencyResult = fluencyPenalty(candidate);
+      const depth = transformationDepth(input, candidate);
       // Protected facts are the hard safety boundary. Semantic marker checks are
       // deliberately warnings: a legitimate style rewrite may replace "rose"
       // with "increased" or "may" with "could" without changing the proposition.
@@ -182,9 +186,13 @@ export async function rankCandidates(input: string, candidates: string[], finger
       const meaning = valid ? Math.max(60, 100 - semantic.length * 8) : Math.max(0, 100 - fact.warnings.length * 30 - semantic.length * 20 - guardrails.length * 30);
       const style = fingerprint ? await scorer.score(candidate, fingerprint) : 50;
       const fluency = fluencyResult.score;
-      return { candidate, meaning, style, fluency, valid, warnings: [...fact.warnings.map((warning) => warning.message), ...guardrails, ...semantic.map((warning) => warning.message), ...fluencyResult.warnings], total: valid ? .45 * meaning + .35 * style + .2 * fluency : -1 };
-    } catch (error) { return { candidate, meaning: 0, style: 0, fluency: 0, valid: false, warnings: [error instanceof Error ? error.message : "Candidate scoring failed"], total: -1 }; }
+      return { candidate, meaning, style, fluency, valid, warnings: [...fact.warnings.map((warning) => warning.message), ...guardrails, ...semantic.map((warning) => warning.message), ...fluencyResult.warnings], total: valid ? .45 * meaning + .35 * style + .2 * fluency : -1, diagnostics: { sentenceRetention: depth.unchangedSentenceRatio, lexicalChange: depth.lexicalChange, paragraphRestructure: depth.paragraphRestructure, protectedFactFailures: fact.warnings.length, registerViolations: guardrails.filter((warning) => warning.includes("first-person")).length, semanticHardFailures: guardrails.filter((warning) => warning.includes("epistemic stance")).length, semanticWarnings: semantic.length, fluencyWarnings: fluencyResult.warnings.length } };
+    } catch (error) { return { candidate, meaning: 0, style: 0, fluency: 0, valid: false, warnings: [error instanceof Error ? error.message : "Candidate scoring failed"], total: -1, diagnostics: { sentenceRetention: 0, lexicalChange: 0, paragraphRestructure: 0, protectedFactFailures: 0, registerViolations: 0, semanticHardFailures: 1, semanticWarnings: 0, fluencyWarnings: 0 } }; }
   }));
+}
+
+function summarizeAttempt(attempt: AttemptDiagnostics["attempt"], scores: CandidateScore[]): AttemptDiagnostics {
+  return { attempt, candidates: scores.map((score, index) => ({ index, meaning: score.meaning, style: score.style, fluency: score.fluency, total: score.total, valid: score.valid, diagnostics: score.diagnostics, warningCount: score.warnings.length })) };
 }
 
 async function generateCandidates(ai: Ai, draft: string, profile: WriterProfile, fingerprint?: StyleFingerprint, stronger = false): Promise<string[]> {
@@ -212,13 +220,16 @@ async function generateCandidates(ai: Ai, draft: string, profile: WriterProfile,
   throw new Error("CANDIDATE_PARSE_FAILED");
 }
 
-export async function transformWithProfile(ai: Ai, draft: string, profile: WriterProfile, fingerprint?: StyleFingerprint): Promise<{ transformed: string; scores: CandidateScore[]; retried: boolean }> {
+export async function transformWithProfile(ai: Ai, draft: string, profile: WriterProfile, fingerprint?: StyleFingerprint): Promise<{ transformed: string; scores: CandidateScore[]; retried: boolean; diagnostics: TransformationDiagnostics }> {
   let candidates = await generateCandidates(ai, draft, profile, fingerprint);
   let scores = await rankCandidates(draft, candidates, fingerprint);
   let best = [...scores].sort((a, b) => b.total - a.total)[0];
   let retried = false;
-  if (!best || !best.valid || transformationDepth(draft, best.candidate).tooLight || best.fluency < 75) {
+  const attempts = [summarizeAttempt("initial", scores)];
+  const retryReasons = [!best || !best.valid ? "VALIDATION_FAILED" : undefined, best && transformationDepth(draft, best.candidate).tooLight ? "TOO_LIGHT" : undefined, best && best.fluency < 75 ? "LOW_FLUENCY" : undefined].filter((reason): reason is string => Boolean(reason));
+  if (retryReasons.length > 0) {
     retried = true; candidates = await generateCandidates(ai, draft, profile, fingerprint, true); scores = await rankCandidates(draft, candidates, fingerprint); best = [...scores].sort((a, b) => b.total - a.total)[0];
+    attempts.push(summarizeAttempt("retry", scores));
   }
   if (!best || !best.valid) {
     console.error(JSON.stringify({
@@ -229,5 +240,6 @@ export async function transformWithProfile(ai: Ai, draft: string, profile: Write
     }));
     throw new Error("PROTECTED_FACT_VALIDATION_FAILED");
   }
-  return { transformed: best.candidate, scores, retried };
+  const selectedCandidateIndex = scores.indexOf(best);
+  return { transformed: best.candidate, scores, retried, diagnostics: { attempts, retryReasons, selectedAttempt: retried ? "retry" : "initial", selectedCandidateIndex, selectionReason: "Highest weighted total among candidates that passed protected-fact, register, and epistemic hard validation." } };
 }

@@ -116,6 +116,7 @@ async function transformDraft(request: Request, env: Env, user: AppUser): Promis
     console.error(JSON.stringify({ message: "transformation failed", code, userId: user.id }));
     return json({ error: "We couldn’t complete this transformation. Your original draft is unchanged. Please try again.", code }, 422);
   }
+  console.log(JSON.stringify({ message: "transformation diagnostics", userId: user.id, ...result.diagnostics }));
   return json({ transformed: result.transformed, provider: "Cloudflare Workers AI", model: "@cf/google/gemma-4-26b-a4b-it", profileVersion: profile.version, profileConfidence: profile.confidence.overall, candidateScores: result.scores.map((score) => ({ meaning: score.meaning, style: score.style, fluency: score.fluency, total: score.total, valid: score.valid, warnings: score.warnings })), retried: result.retried });
 }
 

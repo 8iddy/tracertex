@@ -85,4 +85,16 @@ describe("styleTransformer", () => {
     expect(clumsy!.fluency).toBeLessThan(fluent!.fluency);
     expect(clumsy?.warnings).toEqual(expect.arrayContaining([expect.stringContaining("apostrophe"), expect.stringContaining("conjunctions")]));
   });
+
+  it("records privacy-safe initial and retry diagnostics without candidate text", async () => {
+    const ai = { run: vi.fn()
+      .mockResolvedValueOnce({ response: '{"candidates":[{"text":"I think revenue rose 12% in 2025."}]}' })
+      .mockResolvedValueOnce({ response: '{"candidates":[{"text":"In 2025, revenue rose by 12%, showing a clear result."}]}' }) } as unknown as Ai;
+    const result = await transformWithProfile(ai, "Revenue rose 12% in 2025.", profile);
+    expect(result.retried).toBe(true);
+    expect(result.diagnostics.retryReasons).toContain("VALIDATION_FAILED");
+    expect(result.diagnostics.attempts.map((attempt) => attempt.attempt)).toEqual(["initial", "retry"]);
+    expect(JSON.stringify(result.diagnostics)).not.toContain("revenue rose");
+    expect(result.diagnostics.attempts[0]?.candidates[0]?.diagnostics.registerViolations).toBe(1);
+  });
 });
