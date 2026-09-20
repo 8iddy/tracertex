@@ -118,8 +118,13 @@ export async function rankCandidates(input: string, candidates: string[], finger
   return Promise.all(candidates.map(async (candidate) => {
     try {
       const fact = compareProtectedFacts(input, candidate); const semantic = compareSemanticSignals(input, candidate);
-      const valid = fact.valid && semantic.length === 0;
-      const meaning = valid ? 100 : Math.max(0, 100 - fact.warnings.length * 30 - semantic.length * 20);
+      // Protected facts are the hard safety boundary. Semantic marker checks are
+      // deliberately warnings: a legitimate style rewrite may replace "rose"
+      // with "increased" or "may" with "could" without changing the proposition.
+      // Blocking on exact marker vocabulary made normal long-form rewrites
+      // impossible even when every deterministic fact was preserved.
+      const valid = fact.valid;
+      const meaning = valid ? Math.max(60, 100 - semantic.length * 8) : Math.max(0, 100 - fact.warnings.length * 30 - semantic.length * 20);
       const style = fingerprint ? await scorer.score(candidate, fingerprint) : 50;
       const fluency = Math.max(0, 100 - (candidate.match(/\b(\w+)\s+\1\b/gi) ?? []).length * 25 - (candidate.match(/\.\s*\./g) ?? []).length * 25);
       return { candidate, meaning, style, fluency, valid, warnings: [...fact.warnings.map((warning) => warning.message), ...semantic.map((warning) => warning.message)], total: valid ? .45 * meaning + .35 * style + .2 * fluency : -1 };
@@ -160,6 +165,14 @@ export async function transformWithProfile(ai: Ai, draft: string, profile: Write
   if (best && best.valid && transformationDepth(draft, best.candidate).tooLight) {
     retried = true; candidates = await generateCandidates(ai, draft, profile, fingerprint, true); scores = await rankCandidates(draft, candidates, fingerprint); best = [...scores].sort((a, b) => b.total - a.total)[0];
   }
-  if (!best || !best.valid) throw new Error("No candidate preserved the draft's protected facts and meaning.");
+  if (!best || !best.valid) {
+    console.error(JSON.stringify({
+      message: "No generated candidate preserved all protected facts",
+      code: "PROTECTED_FACT_VALIDATION_FAILED",
+      candidateCount: scores.length,
+      warningCounts: scores.map((score) => score.warnings.length),
+    }));
+    throw new Error("PROTECTED_FACT_VALIDATION_FAILED");
+  }
   return { transformed: best.candidate, scores, retried };
 }

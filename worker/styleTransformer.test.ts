@@ -52,4 +52,17 @@ describe("styleTransformer", () => {
     expect(scores[1]?.valid).toBe(true);
     expect(transformationDepth("One sentence. Another sentence.", "One sentence. Another sentence.").tooLight).toBe(true);
   });
+
+  it("reports semantic marker changes without rejecting a fact-safe rewrite", async () => {
+    const [score] = await rankCandidates(
+      "Revenue may rise 12% in 2025.",
+      ["In 2025, revenue could increase by 12%."],
+      undefined,
+    );
+    expect(score?.valid).toBe(true);
+    expect(score?.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining("certainty"),
+      expect.stringContaining("direction"),
+    ]));
+  });
 });
