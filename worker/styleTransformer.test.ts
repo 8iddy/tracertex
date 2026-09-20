@@ -21,7 +21,7 @@ describe("styleTransformer", () => {
   });
 
   it("returns the model text and strips an accidental fence", async () => {
-    const ai = { run: vi.fn().mockResolvedValue({ response: "```text\nStyled draft.\n```" }) } as unknown as Ai;
+    const ai = { run: vi.fn().mockResolvedValue({ choices: [{ message: { content: "```text\nStyled draft.\n```" } }] }) } as unknown as Ai;
     await expect(transformWithProfile(ai, "Draft.", profile)).resolves.toBe("Styled draft.");
   });
 });

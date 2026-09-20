@@ -44,7 +44,11 @@ export async function transformWithProfile(ai: Ai, draft: string, profile: Write
     max_tokens: 4096,
     temperature: 0.35,
   });
-  const response = typeof result === "object" && result && "response" in result ? result.response : undefined;
+  const response = typeof result === "object" && result && "response" in result && typeof result.response === "string"
+    ? result.response
+    : typeof result === "object" && result && "choices" in result && Array.isArray(result.choices)
+      ? (result.choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content
+      : undefined;
   if (typeof response !== "string" || !response.trim()) throw new Error("The style model returned no text");
   return response.trim().replace(/^```(?:markdown|text)?\s*/i, "").replace(/\s*```$/, "");
 }
