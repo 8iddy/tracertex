@@ -4,10 +4,11 @@ import { compareSemanticSignals } from "../src/validation/compareSemanticSignals
 import { heuristicExemplarRetriever } from "../src/profile/styleFingerprint";
 
 export const STYLE_MODEL = "@cf/google/gemma-4-26b-a4b-it";
-export interface CandidateDiagnostics { sentenceRetention: number; lexicalChange: number; paragraphRestructure: number; protectedFactFailures: number; registerViolations: number; semanticHardFailures: number; semanticWarnings: number; fluencyWarnings: number }
-export interface CandidateScore { candidate: string; meaning: number; style: number; fluency: number; total: number; valid: boolean; warnings: string[]; diagnostics: CandidateDiagnostics }
+export interface CandidateDiagnostics { sentenceRetention: number; lexicalChange: number; clauseOrderChange: number; paragraphRestructure: number; movementScore: number; protectedFactFailures: number; registerViolations: number; semanticHardFailures: number; semanticWarnings: number; fluencyWarnings: number }
+export interface CandidateScore { candidate: string; meaning: number; style: number; fluency: number; total: number; valid: boolean; eligible: boolean; warnings: string[]; diagnostics: CandidateDiagnostics }
 export interface AttemptDiagnostics { attempt: "initial" | "retry"; candidates: Array<Omit<CandidateScore, "candidate" | "warnings"> & { index: number; warningCount: number }> }
-export interface TransformationDiagnostics { attempts: AttemptDiagnostics[]; retryReasons: string[]; selectedAttempt: "initial" | "retry"; selectedCandidateIndex: number; selectionReason: string }
+export interface SectionDiagnostics { sectionIndex: number; wordCount: number; attempts: AttemptDiagnostics[]; retryReasons: string[]; selectedAttempt: "initial" | "retry" | "preserved"; selectedCandidateIndex: number; selectionReason: string }
+export interface TransformationDiagnostics { sections: SectionDiagnostics[]; globalValidation: { protectedFactFailures: number; semanticWarnings: number; hardFailures: number }; selectionReason: string }
 export interface StyleSimilarityScorer { score(candidate: string, fingerprint: StyleFingerprint): Promise<number> }
 
 export type SourceRegister = "formal" | "neutral" | "conversational";
@@ -79,7 +80,7 @@ export function fingerprintContext(fingerprint: StyleFingerprint | undefined, dr
 export function buildStylePrompt(draft: string, profile: WriterProfile, fingerprint?: StyleFingerprint, stronger = false, candidateCount = 3): string {
   return `Transform the completed draft so it reads like the writer described by the measured profile and genuine writing examples.
 
-This is a substantive style transfer, not proofreading. Recast wording and sentence structure throughout; do not merely make a few synonym substitutions, punctuation changes, or preserve the source phrasing by default.${stronger ? " The previous candidate was unsafe, too close, or insufficiently fluent. Produce a cleaner recast while retaining every protected proposition and the source register." : ""}
+This is a substantive section-level style transfer, not proofreading. Rewrite this section substantially in the writer's observed style. Do not preserve sentence wording or clause structure merely because the source is already well written. Reconstruct the expression while preserving the content.${stronger ? " The previous candidate was unsafe, too close, or insufficiently fluent. Produce a cleaner and more substantially reconstructed version while retaining every protected proposition and the source register." : ""}
 
 SOURCE REGISTER
 ${registerDirection(draft)}
@@ -157,11 +158,21 @@ function fluencyPenalty(candidate: string): { score: number; warnings: string[] 
 export function transformationDepth(input: string, output: string) {
   const source = sentenceList(input).map((sentence) => sentence.toLowerCase());
   const target = sentenceList(output).map((sentence) => sentence.toLowerCase());
-  const unchanged = source.filter((sentence) => target.includes(sentence)).length / Math.max(1, source.length);
+  const sentenceRetention = source.filter((sentence) => target.includes(sentence)).length / Math.max(1, source.length);
   const sourceWords = new Set(input.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []);
   const targetWords = new Set(output.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []);
-  const lexicalChange = [...targetWords].filter((word) => !sourceWords.has(word)).length / Math.max(1, targetWords.size);
-  return { unchangedSentenceRatio: unchanged, lexicalChange, paragraphRestructure: Math.abs(input.split(/\n{2,}/).length - output.split(/\n{2,}/).length) / Math.max(1, input.split(/\n{2,}/).length), tooLight: unchanged > .75 && lexicalChange < .18 };
+  const wordUnion = new Set([...sourceWords, ...targetWords]);
+  const lexicalChange = 1 - [...sourceWords].filter((word) => targetWords.has(word)).length / Math.max(1, wordUnion.size);
+  const bigrams = (text: string) => {
+    const words = text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+    return new Set(words.slice(0, -1).map((word, index) => `${word} ${words[index + 1]}`));
+  };
+  const sourceBigrams = bigrams(input); const targetBigrams = bigrams(output); const bigramUnion = new Set([...sourceBigrams, ...targetBigrams]);
+  const clauseOrderChange = 1 - [...sourceBigrams].filter((bigram) => targetBigrams.has(bigram)).length / Math.max(1, bigramUnion.size);
+  const sourceParagraphs = input.split(/\n{2,}/).filter((part) => part.trim()).length; const targetParagraphs = output.split(/\n{2,}/).filter((part) => part.trim()).length;
+  const paragraphRestructure = Math.abs(sourceParagraphs - targetParagraphs) / Math.max(1, sourceParagraphs, targetParagraphs);
+  const movementScore = .4 * (1 - sentenceRetention) + .25 * lexicalChange + .25 * clauseOrderChange + .1 * paragraphRestructure;
+  return { unchangedSentenceRatio: sentenceRetention, lexicalChange, clauseOrderChange, paragraphRestructure, movementScore, tooLight: (sentenceRetention >= .75 && lexicalChange < .08) || movementScore < .18 };
 }
 
 export const deterministicStyleScorer: StyleSimilarityScorer = { async score(candidate, fingerprint) {
@@ -183,16 +194,17 @@ export async function rankCandidates(input: string, candidates: string[], finger
       // Blocking on exact marker vocabulary made normal long-form rewrites
       // impossible even when every deterministic fact was preserved.
       const valid = fact.valid && guardrails.length === 0;
+      const eligible = valid && !depth.tooLight && fluencyResult.score >= 75;
       const meaning = valid ? Math.max(60, 100 - semantic.length * 8) : Math.max(0, 100 - fact.warnings.length * 30 - semantic.length * 20 - guardrails.length * 30);
       const style = fingerprint ? await scorer.score(candidate, fingerprint) : 50;
       const fluency = fluencyResult.score;
-      return { candidate, meaning, style, fluency, valid, warnings: [...fact.warnings.map((warning) => warning.message), ...guardrails, ...semantic.map((warning) => warning.message), ...fluencyResult.warnings], total: valid ? .45 * meaning + .35 * style + .2 * fluency : -1, diagnostics: { sentenceRetention: depth.unchangedSentenceRatio, lexicalChange: depth.lexicalChange, paragraphRestructure: depth.paragraphRestructure, protectedFactFailures: fact.warnings.length, registerViolations: guardrails.filter((warning) => warning.includes("first-person")).length, semanticHardFailures: guardrails.filter((warning) => warning.includes("epistemic stance")).length, semanticWarnings: semantic.length, fluencyWarnings: fluencyResult.warnings.length } };
-    } catch (error) { return { candidate, meaning: 0, style: 0, fluency: 0, valid: false, warnings: [error instanceof Error ? error.message : "Candidate scoring failed"], total: -1, diagnostics: { sentenceRetention: 0, lexicalChange: 0, paragraphRestructure: 0, protectedFactFailures: 0, registerViolations: 0, semanticHardFailures: 1, semanticWarnings: 0, fluencyWarnings: 0 } }; }
+      return { candidate, meaning, style, fluency, valid, eligible, warnings: [...fact.warnings.map((warning) => warning.message), ...guardrails, ...semantic.map((warning) => warning.message), ...fluencyResult.warnings], total: valid ? .45 * meaning + .35 * style + .2 * fluency : -1, diagnostics: { sentenceRetention: depth.unchangedSentenceRatio, lexicalChange: depth.lexicalChange, clauseOrderChange: depth.clauseOrderChange, paragraphRestructure: depth.paragraphRestructure, movementScore: depth.movementScore, protectedFactFailures: fact.warnings.length, registerViolations: guardrails.filter((warning) => warning.includes("first-person")).length, semanticHardFailures: guardrails.filter((warning) => warning.includes("epistemic stance")).length, semanticWarnings: semantic.length, fluencyWarnings: fluencyResult.warnings.length } };
+    } catch (error) { return { candidate, meaning: 0, style: 0, fluency: 0, total: -1, valid: false, eligible: false, warnings: [error instanceof Error ? error.message : "Candidate scoring failed"], diagnostics: { sentenceRetention: 0, lexicalChange: 0, clauseOrderChange: 0, paragraphRestructure: 0, movementScore: 0, protectedFactFailures: 0, registerViolations: 0, semanticHardFailures: 1, semanticWarnings: 0, fluencyWarnings: 0 } }; }
   }));
 }
 
 function summarizeAttempt(attempt: AttemptDiagnostics["attempt"], scores: CandidateScore[]): AttemptDiagnostics {
-  return { attempt, candidates: scores.map((score, index) => ({ index, meaning: score.meaning, style: score.style, fluency: score.fluency, total: score.total, valid: score.valid, diagnostics: score.diagnostics, warningCount: score.warnings.length })) };
+  return { attempt, candidates: scores.map((score, index) => ({ index, meaning: score.meaning, style: score.style, fluency: score.fluency, total: score.total, valid: score.valid, eligible: score.eligible, diagnostics: score.diagnostics, warningCount: score.warnings.length })) };
 }
 
 async function generateCandidates(ai: Ai, draft: string, profile: WriterProfile, fingerprint?: StyleFingerprint, stronger = false): Promise<string[]> {
@@ -220,26 +232,65 @@ async function generateCandidates(ai: Ai, draft: string, profile: WriterProfile,
   throw new Error("CANDIDATE_PARSE_FAILED");
 }
 
+interface DraftSection { heading?: string; body: string; preserve: boolean }
+
+const wordCount = (text: string) => text.trim().split(/\s+/).filter(Boolean).length;
+const isHeading = (paragraph: string) => /^(?:#{1,6}\s+|\d+[.)]\s+|(?:opportunity areas|why this fits|partners and why|demonstrator|risks and mitigation|early indicators|references|bibliography)\s*$)/i.test(paragraph.trim()) || (wordCount(paragraph) <= 10 && !/[.!?]$/.test(paragraph.trim()));
+
+export function splitDraftIntoSections(draft: string, maximumWords = 250): DraftSection[] {
+  const paragraphs = draft.trim().split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+  const sections: DraftSection[] = [];
+  let heading: string | undefined; let body: string[] = []; let words = 0;
+  const flush = () => {
+    if (!heading && body.length === 0) return;
+    sections.push({ heading, body: body.join("\n\n"), preserve: Boolean(heading && /^(?:#{1,6}\s*)?(?:references|bibliography)\b/i.test(heading)) });
+    heading = undefined; body = []; words = 0;
+  };
+  for (const paragraph of paragraphs) {
+    if (isHeading(paragraph)) { flush(); heading = paragraph; continue; }
+    const paragraphWords = wordCount(paragraph);
+    if (body.length && words + paragraphWords > maximumWords) flush();
+    body.push(paragraph); words += paragraphWords;
+  }
+  flush();
+  return sections.length ? sections : [{ body: draft.trim(), preserve: false }];
+}
+
+async function transformSection(ai: Ai, section: DraftSection, sectionIndex: number, profile: WriterProfile, fingerprint?: StyleFingerprint): Promise<{ text: string; score?: CandidateScore; retried: boolean; diagnostics: SectionDiagnostics }> {
+  const headingPrefix = section.heading ? `${section.heading}\n\n` : "";
+  if (section.preserve || wordCount(section.body) < 3) {
+    return { text: `${headingPrefix}${section.body}`.trim(), retried: false, diagnostics: { sectionIndex, wordCount: wordCount(section.body), attempts: [], retryReasons: [], selectedAttempt: "preserved", selectedCandidateIndex: -1, selectionReason: "Reference or very short section preserved verbatim." } };
+  }
+
+  const initial = await rankCandidates(section.body, await generateCandidates(ai, section.body, profile, fingerprint), fingerprint);
+  const attempts = [summarizeAttempt("initial", initial)];
+  const initialBest = [...initial].filter((score) => score.eligible).sort((a, b) => b.total - a.total)[0];
+  const retryReasons = [!initial.some((score) => score.valid) ? "VALIDATION_FAILED" : undefined, !initialBest && initial.some((score) => score.valid && score.diagnostics.movementScore < .18) ? "TOO_LIGHT" : undefined, !initialBest && initial.some((score) => score.valid && score.fluency < 75) ? "LOW_FLUENCY" : undefined].filter((reason): reason is string => Boolean(reason));
+  let retry: CandidateScore[] = [];
+  if (!initialBest) {
+    retry = await rankCandidates(section.body, await generateCandidates(ai, section.body, profile, fingerprint, true), fingerprint);
+    attempts.push(summarizeAttempt("retry", retry));
+  }
+  const pool = [...initial.map((score, index) => ({ score, attempt: "initial" as const, index })), ...retry.map((score, index) => ({ score, attempt: "retry" as const, index }))];
+  const selected = pool.filter(({ score }) => score.eligible).sort((a, b) => b.score.total - a.score.total)[0];
+  if (!selected) {
+    console.error(JSON.stringify({ message: "No section candidate passed safety and movement gates", code: "SECTION_QUALITY_FAILED", sectionIndex, candidateCount: pool.length, retryReasons }));
+    throw new Error("SECTION_QUALITY_FAILED");
+  }
+  return { text: `${headingPrefix}${selected.score.candidate}`.trim(), score: selected.score, retried: retry.length > 0, diagnostics: { sectionIndex, wordCount: wordCount(section.body), attempts, retryReasons, selectedAttempt: selected.attempt, selectedCandidateIndex: selected.index, selectionReason: "Highest weighted total across initial and retry candidates that passed safety, fluency, and minimum-movement gates." } };
+}
+
 export async function transformWithProfile(ai: Ai, draft: string, profile: WriterProfile, fingerprint?: StyleFingerprint): Promise<{ transformed: string; scores: CandidateScore[]; retried: boolean; diagnostics: TransformationDiagnostics }> {
-  let candidates = await generateCandidates(ai, draft, profile, fingerprint);
-  let scores = await rankCandidates(draft, candidates, fingerprint);
-  let best = [...scores].sort((a, b) => b.total - a.total)[0];
-  let retried = false;
-  const attempts = [summarizeAttempt("initial", scores)];
-  const retryReasons = [!best || !best.valid ? "VALIDATION_FAILED" : undefined, best && transformationDepth(draft, best.candidate).tooLight ? "TOO_LIGHT" : undefined, best && best.fluency < 75 ? "LOW_FLUENCY" : undefined].filter((reason): reason is string => Boolean(reason));
-  if (retryReasons.length > 0) {
-    retried = true; candidates = await generateCandidates(ai, draft, profile, fingerprint, true); scores = await rankCandidates(draft, candidates, fingerprint); best = [...scores].sort((a, b) => b.total - a.total)[0];
-    attempts.push(summarizeAttempt("retry", scores));
+  const sections = splitDraftIntoSections(draft);
+  const results: Awaited<ReturnType<typeof transformSection>>[] = [];
+  for (let index = 0; index < sections.length; index += 2) {
+    results.push(...await Promise.all(sections.slice(index, index + 2).map((section, offset) => transformSection(ai, section, index + offset, profile, fingerprint))));
   }
-  if (!best || !best.valid) {
-    console.error(JSON.stringify({
-      message: "No generated candidate preserved all protected facts",
-      code: "PROTECTED_FACT_VALIDATION_FAILED",
-      candidateCount: scores.length,
-      warningCounts: scores.map((score) => score.warnings.length),
-    }));
-    throw new Error("PROTECTED_FACT_VALIDATION_FAILED");
+  const transformed = results.map((result) => result.text).join("\n\n");
+  const globalFacts = compareProtectedFacts(draft, transformed); const globalGuardrails = authorshipGuardrails(draft, transformed); const globalSemantic = compareSemanticSignals(draft, transformed);
+  if (!globalFacts.valid || globalGuardrails.length) {
+    console.error(JSON.stringify({ message: "Reassembled draft failed global validation", code: "GLOBAL_VALIDATION_FAILED", protectedFactFailures: globalFacts.warnings.length, hardFailures: globalGuardrails.length }));
+    throw new Error("GLOBAL_VALIDATION_FAILED");
   }
-  const selectedCandidateIndex = scores.indexOf(best);
-  return { transformed: best.candidate, scores, retried, diagnostics: { attempts, retryReasons, selectedAttempt: retried ? "retry" : "initial", selectedCandidateIndex, selectionReason: "Highest weighted total among candidates that passed protected-fact, register, and epistemic hard validation." } };
+  return { transformed, scores: results.flatMap((result) => result.score ? [result.score] : []), retried: results.some((result) => result.retried), diagnostics: { sections: results.map((result) => result.diagnostics), globalValidation: { protectedFactFailures: globalFacts.warnings.length, semanticWarnings: globalSemantic.length, hardFailures: globalGuardrails.length }, selectionReason: "Each section competes across initial and retry candidates; the reassembled draft must then pass global protected-fact and epistemic validation." } };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WriterProfile } from "../src/editor/eventTypes";
-import { buildStylePrompt, detectSourceRegister, parseCandidates, rankCandidates, transformationDepth, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
+import { buildStylePrompt, detectSourceRegister, parseCandidates, rankCandidates, splitDraftIntoSections, transformationDepth, transformWithProfile, writerProfileToStyleContext } from "./styleTransformer";
 
 const profile = {
   version: 2, createdAt: "2026-01-01", updatedAt: "2026-01-02", sampleSessions: 4, sampleWords: 500, sampleEvents: 900,
@@ -13,7 +13,7 @@ const profile = {
 describe("styleTransformer", () => {
   it("uses measured profile features without treating confidence as a gate", () => {
     const prompt = buildStylePrompt("Revenue rose 12% in 2025.", profile);
-    expect(prompt).toContain("substantive style transfer");
+    expect(prompt).toContain("substantive section-level style transfer");
     expect(prompt).toContain("plainly (4)");
     expect(prompt).toContain("in practice (3)");
     expect(prompt).toContain("Preserve meaning, claims, numbers, percentages, dates");
@@ -32,7 +32,8 @@ describe("styleTransformer", () => {
     const ai = { run: vi.fn().mockResolvedValue({ choices: [{ message: { content: "```json\n{\"candidates\":[\"Revenue rose 12% in 2025, and the result was clear.\",\"In 2025, revenue rose by 12%; the outcome was clear.\"]}\n```" } }] }) } as unknown as Ai;
     const result = await transformWithProfile(ai, "Revenue rose 12% in 2025.", profile);
     expect(result.transformed).toContain("12%");
-    expect(result.scores).toHaveLength(2);
+    expect(result.scores).toHaveLength(1);
+    expect(result.diagnostics.sections[0]?.attempts[0]?.candidates).toHaveLength(2);
   });
 
   it("accepts object candidates and falls back once from malformed structured output", async () => {
@@ -52,6 +53,24 @@ describe("styleTransformer", () => {
     expect(scores[0]?.valid).toBe(false);
     expect(scores[1]?.valid).toBe(true);
     expect(transformationDepth("One sentence. Another sentence.", "One sentence. Another sentence.").tooLight).toBe(true);
+  });
+
+  it("normalizes movement signals and catches the 75-percent boundary", () => {
+    const depth = transformationDepth("One sentence has several stable words. Two sentence has several stable words. Three sentence has several stable words. Four sentence has several stable words.", "One sentence has several stable words. Two sentence has several stable words. Three sentence has several stable words. Several stable words four sentence has.");
+    expect(depth.unchangedSentenceRatio).toBe(.75);
+    expect(depth.paragraphRestructure).toBeGreaterThanOrEqual(0);
+    expect(depth.paragraphRestructure).toBeLessThanOrEqual(1);
+    expect(depth.clauseOrderChange).toBeGreaterThanOrEqual(0);
+    expect(depth.movementScore).toBeGreaterThanOrEqual(0);
+    expect(depth.movementScore).toBeLessThanOrEqual(1);
+    expect(depth.tooLight).toBe(true);
+  });
+
+  it("splits long drafts at natural headings and preserves reference sections", () => {
+    const sections = splitDraftIntoSections("1. Opportunity areas\n\nFirst section body with enough words to transform safely and clearly.\n\n2. Partners and why\n\nSecond section body with enough words to transform safely and clearly.\n\nReferences\n\nUK Government. (2024). Report.", 250);
+    expect(sections).toHaveLength(3);
+    expect(sections.map((section) => section.heading)).toEqual(["1. Opportunity areas", "2. Partners and why", "References"]);
+    expect(sections[2]?.preserve).toBe(true);
   });
 
   it("reports semantic marker changes without rejecting a fact-safe rewrite", async () => {
@@ -92,9 +111,9 @@ describe("styleTransformer", () => {
       .mockResolvedValueOnce({ response: '{"candidates":[{"text":"In 2025, revenue rose by 12%, showing a clear result."}]}' }) } as unknown as Ai;
     const result = await transformWithProfile(ai, "Revenue rose 12% in 2025.", profile);
     expect(result.retried).toBe(true);
-    expect(result.diagnostics.retryReasons).toContain("VALIDATION_FAILED");
-    expect(result.diagnostics.attempts.map((attempt) => attempt.attempt)).toEqual(["initial", "retry"]);
+    expect(result.diagnostics.sections[0]?.retryReasons).toContain("VALIDATION_FAILED");
+    expect(result.diagnostics.sections[0]?.attempts.map((attempt) => attempt.attempt)).toEqual(["initial", "retry"]);
     expect(JSON.stringify(result.diagnostics)).not.toContain("revenue rose");
-    expect(result.diagnostics.attempts[0]?.candidates[0]?.diagnostics.registerViolations).toBe(1);
+    expect(result.diagnostics.sections[0]?.attempts[0]?.candidates[0]?.diagnostics.registerViolations).toBe(1);
   });
 });
