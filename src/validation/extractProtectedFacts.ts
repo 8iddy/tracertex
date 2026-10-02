@@ -19,7 +19,8 @@ export function extractProtectedFacts(text: string): ProtectedFact[] {
     pattern.lastIndex = 0;
     for (const match of text.matchAll(pattern)) {
       const index = match.index ?? 0;
-      const value = match[0];
+      // A URL or DOI that ends a sentence must not absorb the sentence's full stop.
+      const value = type === "url" || type === "doi" ? match[0].replace(/[.,;:!?]+$/, "") : match[0];
       if (occupied.some(([start, end]) => index >= start && index < end)) continue;
       facts.push({ type, value, sourcePosition: index });
       occupied.push([index, index + value.length]);

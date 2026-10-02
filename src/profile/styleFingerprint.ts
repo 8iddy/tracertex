@@ -1,5 +1,6 @@
 import type { StyleFingerprint, WriterProfile, WritingSession } from "../editor/eventTypes";
 import { extractTextFeatures, paragraphs, sentences } from "./extractFeatures";
+import { buildRhythmProfile } from "./rhythm";
 
 const WORD = /[\p{L}\p{N}'’-]+/gu;
 const words = (text: string) => text.match(WORD) ?? [];
@@ -13,11 +14,13 @@ export interface ExemplarRetriever {
   retrieve(draft: string, fingerprint: StyleFingerprint, limit: number): StyleFingerprint["representativeExcerpts"];
 }
 
+const isFormalDraft = (lower: string) => /\b(should|recommend|policy|therefore|must)\b/.test(lower);
+
 const registerFor = (draft: string): string[] => {
   const lower = draft.toLowerCase();
-  if (/\b(should|recommend|policy|therefore|must)\b/.test(lower)) return ["argument", "explanation"];
-  if (/\b(i |my |me |yesterday|felt)\b/.test(lower)) return ["personal"];
-  if (/\b(how|why|process|system|explain)\b/.test(lower)) return ["explanation", "argument"];
+  if (isFormalDraft(lower)) return ["argument", "explanation", "revision", "personal"];
+  if (/\b(i |my |me |yesterday|felt)\b/.test(lower)) return ["personal", "explanation", "argument", "revision"];
+  if (/\b(how|why|process|system|explain)\b/.test(lower)) return ["explanation", "argument", "revision", "personal"];
   return ["argument", "explanation", "personal", "revision"];
 };
 
@@ -25,20 +28,42 @@ const registerFor = (draft: string): string[] => {
 export const heuristicExemplarRetriever: ExemplarRetriever = {
   retrieve(draft, fingerprint, limit) {
     const preferred = registerFor(draft);
-    return [...fingerprint.representativeExcerpts].sort((a, b) => preferred.indexOf(a.taskType) - preferred.indexOf(b.taskType)).slice(0, Math.min(6, Math.max(3, limit)));
+    const rank = (taskType: string) => { const index = preferred.indexOf(taskType); return index < 0 ? preferred.length : index; };
+    const ordered = [...fingerprint.representativeExcerpts].sort((a, b) => rank(a.taskType) - rank(b.taskType));
+    // A personal, conversational sample is the weakest evidence for a formal
+    // source. It is used only when there is too little other genuine writing.
+    const impersonal = ordered.filter((excerpt) => excerpt.taskType !== "personal");
+    const pool = isFormalDraft(draft.toLowerCase()) && impersonal.length >= 2 ? impersonal : ordered;
+    return pool.slice(0, Math.min(6, Math.max(3, limit)));
   },
 };
+
+/** Whole sentences with their punctuation intact: rhythm is unreadable in a bare word stream. */
+export function excerptFrom(text: string, maximumWords = 120): string {
+  const source = paragraphs(text).find((part) => words(part).length >= 50) ?? text;
+  const kept: string[] = []; let total = 0;
+  for (const sentence of sentences(source)) {
+    const length = words(sentence).length;
+    if (kept.length && total + length > maximumWords) break;
+    kept.push(sentence); total += length;
+  }
+  return kept.join(" ").trim();
+}
+
+/** Revision tasks start from supplied prose, so they describe rhythm only when nothing else does. */
+export function rhythmSourceTexts(sessions: WritingSession[]): string[] {
+  const authored = sessions.filter((session) => session.taskType !== "revision");
+  return (authored.length >= 2 ? authored : sessions).map((session) => session.finalDocument);
+}
 
 export function selectRepresentativeExcerpts(sessions: WritingSession[]): StyleFingerprint["representativeExcerpts"] {
   const selected: StyleFingerprint["representativeExcerpts"] = [];
   const usedTypes = new Set<string>();
   for (const session of sessions.sort((a, b) => b.completedAt.localeCompare(a.completedAt))) {
     if (usedTypes.has(session.taskType)) continue;
-    const text = session.finalDocument.trim();
-    const excerpt = paragraphs(text).find((part) => words(part).length >= 50) ?? text;
-    const excerptWords = words(excerpt);
-    if (excerptWords.length < 30) continue;
-    selected.push({ sessionId: session.id, taskType: session.taskType, text: excerptWords.slice(0, 120).join(" ") });
+    const excerpt = excerptFrom(session.finalDocument.trim());
+    if (words(excerpt).length < 30) continue;
+    selected.push({ sessionId: session.id, taskType: session.taskType, text: excerpt });
     usedTypes.add(session.taskType);
     if (selected.length === 6) break;
   }
@@ -65,6 +90,7 @@ export function buildStyleFingerprint(sessions: WritingSession[], profile: Write
       meanParagraphWords: profile.linguistic.meanParagraphWords, paragraphLengthDistribution: profile.linguistic.paragraphLengthDistribution,
       punctuationFrequency: features.punctuationFrequency, transitionFrequency: countTerms(corpus, transitions), hedgeFrequency: countTerms(corpus, hedges), functionWordFrequency: countTerms(corpus, functionWords),
       sentenceOpeningPatterns: top([...new Map(opens.map((item) => [item, opens.filter((candidate) => candidate === item).length])).entries()], 8), commonPhrases: phrases,
+      rhythm: buildRhythmProfile(rhythmSourceTexts(eligible)),
     },
     rhetoricalPatterns: { sentenceConstruction: [], paragraphMovement: [], qualificationPatterns: [], argumentPatterns: [], transitionPatterns: [], lexicalPreferences: [], avoidedPatterns: [] },
     representativeExcerpts: excerpts,

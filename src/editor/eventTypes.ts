@@ -99,6 +99,25 @@ export interface WritingSession {
   styleEligible?: boolean;
 }
 
+export type OpeningType = "subject" | "firstPerson" | "connective" | "subordinate" | "prepositional" | "participial";
+
+export interface RhythmProfile {
+  sentenceCount: number;
+  lengthQuantiles: { p10: number; p25: number; p50: number; p75: number; p90: number };
+  lengthStdDev: number;
+  /** Share of sentences of 8 words or fewer. */
+  shortSentenceShare: number;
+  /** Share of sentences of 28 words or more. */
+  longSentenceShare: number;
+  /** Mean absolute difference in length between neighbouring sentences. */
+  adjacentLengthDelta: number;
+  openingTypes: Record<OpeningType, number>;
+  commasPerSentence: number;
+  marksPer100Words: { semicolon: number; colon: number; dash: number; parenthesis: number };
+  coordinatedSentenceShare: number;
+  subordinatedSentenceShare: number;
+}
+
 export interface StyleFingerprint {
   id?: string;
   writerProfileId?: string;
@@ -118,6 +137,8 @@ export interface StyleFingerprint {
     functionWordFrequency: Record<string, number>;
     sentenceOpeningPatterns: string[];
     commonPhrases: string[];
+    /** Sentence architecture measured from genuine prose; absent on fingerprints stored before it existed. */
+    rhythm?: RhythmProfile;
   };
   rhetoricalPatterns: {
     sentenceConstruction: string[];

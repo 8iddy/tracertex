@@ -1,8 +1,9 @@
 import type { AppUser, CalibrationTaskType } from "../src/editor/eventTypes";
 import { progressForCompletedTasks } from "../src/auth/onboarding";
 import { D1UserRepository, ensureApplicationUser, getVerifiedIdentity } from "./auth";
-import { transformWithProfile } from "./styleTransformer";
-import { buildStyleFingerprint } from "../src/profile/styleFingerprint";
+import { STYLE_MODEL, transformWithProfile } from "./styleTransformer";
+import { buildStyleFingerprint, rhythmSourceTexts, selectRepresentativeExcerpts } from "../src/profile/styleFingerprint";
+import { buildRhythmProfile } from "../src/profile/rhythm";
 import type { StyleFingerprint, WriterProfile, WritingSession } from "../src/editor/eventTypes";
 
 const REQUIRED_TASKS: CalibrationTaskType[] = ["personal", "explanation", "argument", "revision"];
@@ -64,6 +65,25 @@ async function saveSession(request: Request, env: Env, user: AppUser): Promise<R
   return json({ ok: true, id }, 201);
 }
 
+/** Genuine, style-eligible calibration writing only: the sole source of exemplars and rhythm. */
+async function loadEligibleSessions(env: Env, user: AppUser): Promise<WritingSession[]> {
+  const rows = await env.DB.prepare("SELECT id, prompt_id, prompt, task_type, started_at, completed_at, final_document, style_eligible FROM sessions WHERE user_id = ? AND style_eligible = 1 AND final_document IS NOT NULL AND length(final_document) > 0 ORDER BY completed_at DESC").bind(user.id).all<{ id: string; prompt_id: string; prompt: string; task_type: CalibrationTaskType; started_at: string; completed_at: string; final_document: string; style_eligible: number }>();
+  return rows.results.map((row) => ({ id: row.id, userId: user.id, promptId: row.prompt_id, prompt: row.prompt, taskType: row.task_type, startedAt: row.started_at, completedAt: row.completed_at, startingDocument: "", finalDocument: row.final_document, events: [], metrics: { durationMs: 0, totalCharactersInserted: 0, totalCharactersDeleted: 0, finalCharacterCount: row.final_document.length, finalWordCount: row.final_document.trim().split(/\s+/).filter(Boolean).length, meanInterInputIntervalMs: 0, medianInterInputIntervalMs: 0, meanBurstLength: 0, medianBurstLength: 0, meanPauseMs: 0, medianPauseMs: 0, pauseDistribution: [], pauseContexts: { insideWord: 0, betweenWords: 0, afterComma: 0, afterPunctuation: 0, sentenceBoundary: 0, paragraphBoundary: 0 }, deletionRate: 0, replacementRate: 0, cursorReturnCount: 0, selectionCount: 0, undoCount: 0, redoCount: 0, sentenceCount: 0, paragraphCount: 0, meanSentenceWords: 0, meanParagraphWords: 0, revisionCount: 0 }, styleEligible: Boolean(row.style_eligible) }));
+}
+
+/**
+ * Fingerprints stored before sentence rhythm was measured also hold excerpts
+ * without punctuation. Both are rebuilt in memory from the same genuine
+ * sessions, so existing writers benefit without recalibrating or a migration.
+ */
+async function withCurrentEvidence(env: Env, user: AppUser, fingerprint: StyleFingerprint): Promise<StyleFingerprint> {
+  if (fingerprint.statistics.rhythm) return fingerprint;
+  const sessions = await loadEligibleSessions(env, user);
+  if (!sessions.length) return fingerprint;
+  const excerpts = selectRepresentativeExcerpts([...sessions]);
+  return { ...fingerprint, statistics: { ...fingerprint.statistics, rhythm: buildRhythmProfile(rhythmSourceTexts(sessions)) }, representativeExcerpts: excerpts.length ? excerpts : fingerprint.representativeExcerpts };
+}
+
 async function saveProfile(request: Request, env: Env, user: AppUser): Promise<Response> {
   const body = await parseBody(request);
   const version = Number(body.version ?? 0);
@@ -76,8 +96,7 @@ async function saveProfile(request: Request, env: Env, user: AppUser): Promise<R
   const profile = await env.DB.prepare("SELECT id FROM writer_profiles WHERE user_id = ? AND version = ?").bind(user.id, version).first<{ id: string }>();
   if (profile) await env.DB.prepare("UPDATE users SET active_profile_id = ? WHERE id = ?").bind(profile.id, user.id).run();
   if (profile) {
-    const rows = await env.DB.prepare("SELECT id, prompt_id, prompt, task_type, started_at, completed_at, final_document, style_eligible FROM sessions WHERE user_id = ? AND style_eligible = 1 AND final_document IS NOT NULL AND length(final_document) > 0 ORDER BY completed_at DESC").bind(user.id).all<{ id: string; prompt_id: string; prompt: string; task_type: CalibrationTaskType; started_at: string; completed_at: string; final_document: string; style_eligible: number }>();
-    const sessions: WritingSession[] = rows.results.map((row) => ({ id: row.id, userId: user.id, promptId: row.prompt_id, prompt: row.prompt, taskType: row.task_type, startedAt: row.started_at, completedAt: row.completed_at, startingDocument: "", finalDocument: row.final_document, events: [], metrics: { durationMs: 0, totalCharactersInserted: 0, totalCharactersDeleted: 0, finalCharacterCount: row.final_document.length, finalWordCount: row.final_document.trim().split(/\s+/).filter(Boolean).length, meanInterInputIntervalMs: 0, medianInterInputIntervalMs: 0, meanBurstLength: 0, medianBurstLength: 0, meanPauseMs: 0, medianPauseMs: 0, pauseDistribution: [], pauseContexts: { insideWord: 0, betweenWords: 0, afterComma: 0, afterPunctuation: 0, sentenceBoundary: 0, paragraphBoundary: 0 }, deletionRate: 0, replacementRate: 0, cursorReturnCount: 0, selectionCount: 0, undoCount: 0, redoCount: 0, sentenceCount: 0, paragraphCount: 0, meanSentenceWords: 0, meanParagraphWords: 0, revisionCount: 0 }, styleEligible: Boolean(row.style_eligible) }));
+    const sessions = await loadEligibleSessions(env, user);
     const previous = await env.DB.prepare("SELECT fingerprint_json FROM style_fingerprints WHERE user_id = ? ORDER BY version DESC LIMIT 1").bind(user.id).first<{ fingerprint_json: string }>();
     const fingerprint = buildStyleFingerprint(sessions, { ...(body as unknown as WriterProfile), id: profile.id, userId: user.id }, previous ? JSON.parse(previous.fingerprint_json) as StyleFingerprint : undefined);
     // Higher-level labels remain evidence-bound and are cached with this fingerprint.
@@ -109,15 +128,21 @@ async function transformDraft(request: Request, env: Env, user: AppUser): Promis
   if (!row) return json({ error: "Complete calibration to create an active Writer Profile." }, 409);
   const profile = JSON.parse(row.profile_json) as WriterProfile;
   const fingerprintRow = await env.DB.prepare("SELECT fingerprint_json FROM style_fingerprints WHERE user_id = ? ORDER BY version DESC LIMIT 1").bind(user.id).first<{ fingerprint_json: string }>();
+  const stored = fingerprintRow ? JSON.parse(fingerprintRow.fingerprint_json) as StyleFingerprint : undefined;
+  const fingerprint = stored ? await withCurrentEvidence(env, user, stored) : undefined;
   let result;
-  try { result = await transformWithProfile(env.AI, draft, profile, fingerprintRow ? JSON.parse(fingerprintRow.fingerprint_json) as StyleFingerprint : undefined); }
+  try { result = await transformWithProfile(env.AI, draft, profile, fingerprint); }
   catch (error) {
     const code = error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "GENERATION_FAILED";
     console.error(JSON.stringify({ message: "transformation failed", code, userId: user.id }));
-    return json({ error: "We couldn’t complete this transformation. Your original draft is unchanged. Please try again.", code }, 422);
+    const explanation = code === "TRANSFORMATION_TOO_LIGHT"
+      ? "TracerText could not move this draft far enough toward your writing style while keeping its meaning intact, so it did not return a near-copy. Your original draft is unchanged. Please try again."
+      : "We couldn’t complete this transformation. Your original draft is unchanged. Please try again.";
+    return json({ error: explanation, code }, 422);
   }
+  // Metadata only: scores, counts and reasons. Never draft, exemplar or output text.
   console.log(JSON.stringify({ message: "transformation diagnostics", userId: user.id, ...result.diagnostics }));
-  return json({ transformed: result.transformed, provider: "Cloudflare Workers AI", model: "@cf/google/gemma-4-26b-a4b-it", profileVersion: profile.version, profileConfidence: profile.confidence.overall, candidateScores: result.scores.map((score) => ({ meaning: score.meaning, style: score.style, fluency: score.fluency, total: score.total, valid: score.valid, warnings: score.warnings })), retried: result.retried });
+  return json({ transformed: result.transformed, provider: "Cloudflare Workers AI", model: STYLE_MODEL, profileVersion: profile.version, profileConfidence: profile.confidence.overall, candidateScores: result.scores.map((score) => ({ meaning: score.meaning, style: score.style, fluency: score.fluency, movement: score.movement, total: score.total, valid: score.valid, warnings: score.warnings })), movement: result.diagnostics.movement, retried: result.retried });
 }
 
 async function startOnboarding(env: Env, user: AppUser): Promise<AppUser> {
